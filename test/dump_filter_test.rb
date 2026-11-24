@@ -108,3 +108,107 @@ class DumpFilterTest < Minitest::Test
     end
   end
 end
+
+# The real WCA dump puts one row per line inside each INSERT statement,
+# and result_attempts has id and timestamp columns.
+class DumpFilterMultiLineTest < Minitest::Test
+  DUMP = <<~'SQL'
+    /*M!999999\- enable the sandbox mode */
+    /*!40101 SET NAMES utf8mb4 */;
+    --
+    -- Table structure for table `result_attempts`
+    --
+
+    DROP TABLE IF EXISTS `result_attempts`;
+    CREATE TABLE `result_attempts` (
+      `id` bigint NOT NULL AUTO_INCREMENT,
+      `attempt_number` tinyint NOT NULL,
+      `created_at` datetime(6) NOT NULL,
+      `result_id` bigint NOT NULL,
+      `updated_at` datetime(6) NOT NULL,
+      `value` int NOT NULL,
+      PRIMARY KEY (`id`),
+      KEY `index_result_attempts_on_result_id` (`result_id`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    LOCK TABLES `result_attempts` WRITE;
+    /*!40000 ALTER TABLE `result_attempts` DISABLE KEYS */;
+    set autocommit=0;
+    INSERT INTO `result_attempts` VALUES (1,1,'2025-05-06 05:21:04.199475',14167,'2025-05-06 05:21:04.199475',1438),
+    (2,2,'2025-05-06 05:21:04.199475',14167,'2025-05-06 05:21:04.199475',1500),
+    (3,1,'2025-05-06 05:21:04.199475',20001,'2025-05-06 05:21:04.199475',130),
+    (4,2,'2025-05-06 05:21:04.199475',20001,'2025-05-06 05:21:04.199475',-1);
+    INSERT INTO `result_attempts` VALUES (5,1,'2025-05-06 05:21:04.199475',20002,'2025-05-06 05:21:04.199475',99),
+    (6,1,'2025-05-06 05:21:04.199475',14167,'2025-05-06 05:21:04.199475',1600);
+    /*!40000 ALTER TABLE `result_attempts` ENABLE KEYS */;
+    UNLOCK TABLES;
+    commit;
+
+    --
+    -- Table structure for table `results`
+    --
+
+    DROP TABLE IF EXISTS `results`;
+    CREATE TABLE `results` (
+      `id` int NOT NULL AUTO_INCREMENT,
+      `pos` smallint NOT NULL DEFAULT '0',
+      `best` int NOT NULL DEFAULT '0',
+      `competition_id` varchar(32) NOT NULL DEFAULT '',
+      `person_country_id` varchar(50) DEFAULT NULL,
+      `event_id` varchar(6) NOT NULL DEFAULT '',
+      `format_id` char(1) NOT NULL DEFAULT '',
+      `average` int NOT NULL DEFAULT '0',
+      `person_id` varchar(10) NOT NULL DEFAULT '',
+      `person_name` varchar(80) DEFAULT NULL,
+      PRIMARY KEY (`id`),
+      KEY `Results_fk_tournament` (`competition_id`),
+      KEY `Results_eventAndAverage` (`event_id`,`average`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+    INSERT INTO `results` VALUES (14167,2128,1968,'LyonOpen2007','Cote d_Ivoire','333','a',15,'2007AMAN01','Etienne, (Jr.)'),
+    (20001,1,108,'PNW2026','India','222','a',119,'2022FRED05','Ian Cantius Fredric'),
+    (20002,2,99,'PNW2026','USA','222','a',125,'2020ABCD01','O\'Neil ''222'' (x)');
+    --
+    -- Table structure for table `round_types`
+    --
+    CREATE TABLE `round_types` (
+      `id` varchar(1) NOT NULL
+    ) ENGINE=InnoDB;
+    INSERT INTO `round_types` VALUES ('1'),
+    ('f');
+  SQL
+
+  def test_multi_line_inserts
+    Dir.mktmpdir do |dir|
+      dump = File.join(dir, "dump.sql")
+      File.write(dump, DUMP)
+      out = File.join(dir, "t")
+      Dir.mkdir(out)
+      filter = DumpFilter.new(dump, required_tables: %w(results result_attempts round_types), keep_events: %w(222))
+      files = filter.split(out)
+
+      assert_equal Set[20001, 20002], filter.kept_result_ids
+      assert_equal 2, filter.row_counts["results"]
+      assert_equal 3, filter.row_counts["result_attempts"]
+
+      results = File.read(files["results"])
+      assert_includes results, "INSERT INTO `results` VALUES (20001,1,108,'PNW2026','India','222'"
+      assert_includes results, "'O\\'Neil ''222'' (x)');\n"
+      refute_includes results, "LyonOpen2007"
+      refute_includes results, "round_types"
+
+      attempts = File.read(files["result_attempts"])
+      refute_includes attempts, ",14167,"
+      assert_includes attempts, "(3,1,'2025-05-06 05:21:04.199475',20001,'2025-05-06 05:21:04.199475',130),(4,"
+      assert_includes attempts, "INSERT INTO `result_attempts` VALUES (5,1,"
+      # Every INSERT statement in the output is complete on one line.
+      attempts.lines.grep(/INSERT INTO/).each { |l| assert l.rstrip.end_with?(");"), l }
+      refute_match(/^\(/, attempts)
+      assert_includes attempts, "set autocommit=0;"
+      assert_includes attempts, "CREATE INDEX `index_result_attempts_on_result_id` ON result_attempts (`result_id`);"
+
+      round_types = File.read(files["round_types"])
+      assert_includes round_types, "INSERT INTO `round_types` VALUES ('1'),\n('f');"
+    end
+  end
+end

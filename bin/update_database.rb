@@ -33,6 +33,10 @@ Dir.mktmpdir do |tmp_direcory|
       filter = DumpFilter.new(filename, required_tables: Database::REQUIRED_TABLES, keep_events: Database::KEEP_EVENTS)
       table_files = filter.split("tables")
       puts "  - Kept #{filter.row_counts["results"]} results and #{filter.row_counts["result_attempts"]} attempts"
+      # Fail the build loudly instead of publishing empty pages.
+      if filter.row_counts["results"] == 0 || filter.row_counts["result_attempts"] == 0
+        raise "No #{Database::KEEP_EVENTS.join('/')} results or attempts were kept; the dump format may have changed."
+      end
     end
     File.delete(filename) # Free disk space before importing.
 
