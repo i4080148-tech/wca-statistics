@@ -1,11 +1,14 @@
 #!/usr/bin/env ruby
 
+# Downloads the WCA developer database dump and imports the tables we need into MySQL.
+# Only results for Database::KEEP_EVENTS (2x2) are imported, which keeps memory and disk use small.
+
 require 'tmpdir'
 require 'fileutils'
-require 'stringio'
 require 'time'
 require_relative "helpers"
 require_relative "../core/database"
+require_relative "../core/dump_filter"
 
 Dir.mktmpdir do |tmp_direcory|
   FileUtils.cd tmp_direcory do
@@ -17,82 +20,40 @@ Dir.mktmpdir do |tmp_direcory|
     filter_out_mysql_warning = '2>&1 | grep -v "[Warning] Using a password on the command line interface can be insecure."'
 
     Helpers.timed_task("Downloading #{database_export_url}") { `wget --quiet #{database_export_url}` }
-    Helpers.timed_task("Unzipping #{zip_filename}") { `unzip #{zip_filename}` }
-    Helpers.timed_task("Importing #{filename} into #{config["database"]}") do
+    Helpers.timed_task("Unzipping #{zip_filename}") do
+      `unzip #{zip_filename}`
+      File.delete(zip_filename) # Free disk space; only the .sql file is needed from here on.
+    end
+    raise "Download or unzip failed: #{filename} is missing" unless File.exist?(filename)
+    export_timestamp = File.mtime(filename)
+
+    table_files = nil
+    Helpers.timed_task("Splitting #{filename} (keeping results for #{Database::KEEP_EVENTS.join(', ')})") do
+      Dir.mkdir("tables")
+      filter = DumpFilter.new(filename, required_tables: Database::REQUIRED_TABLES, keep_events: Database::KEEP_EVENTS)
+      table_files = filter.split("tables")
+      puts "  - Kept #{filter.row_counts["results"]} results and #{filter.row_counts["result_attempts"]} attempts"
+    end
+    File.delete(filename) # Free disk space before importing.
+
+    missing = Database::REQUIRED_TABLES - table_files.keys
+    raise "Tables missing from the dump: #{missing.join(', ')}" unless missing.empty?
+
+    Helpers.timed_task("Importing tables into #{config["database"]}") do
       `#{mysql_with_credentials} -e "DROP DATABASE IF EXISTS #{config["database"]}" #{filter_out_mysql_warning}`
       `#{mysql_with_credentials} -e "CREATE DATABASE #{config["database"]}" #{filter_out_mysql_warning}`
-
-      table_sqls = {}
-
-      # The export file is gigabytes in size, so we don't want to operate
-      # on the whole contents in the memory. Instead, we read it line by
-      # line and effectively build exports for individual tables, only
-      # the ones we care about.
-      File.open(filename, "r") do |file|
-        lines = []
-        header = nil
-        current_table_name = nil
-
-        # The export comes from MariaDB and the first line is
-        #
-        #   /*!999999\- enable the sandbox mode */
-        #
-        # MySQL does not recognise this command, so we always skip this
-        # line. See https://mariadb.org/mariadb-dump-file-compatibility-change
-        file.readline
-
-        until file.eof? do
-          line = file.readline
-
-          table_begin_match = line.match(/-- Table structure for table `(.*?)`/)
-
-          if table_begin_match
-            table_name = table_begin_match[1]
-
-            if header.nil?
-              header = lines.join("\n")
-            elsif current_table_name
-              table_sqls[current_table_name] = header + "\n" + lines.join("\n")
-              current_table_name = nil
-            end
-
-            if Database::REQUIRED_TABLES.include?(table_name)
-              current_table_name = table_name
-            end
-
-            lines = []
-          end
-
-          lines.push(line)
-        end
-      end
-
       Database::REQUIRED_TABLES.each do |table_name|
         puts "  - Importing table #{table_name}"
-        table_sql = table_sqls[table_name]
-        # Get rid of indexes within the table definition in favour of index creations after all the INSERT statements.
-        index_creations = ""
-        table_sql.gsub!(/,\s*KEY (.\w+.) (\([^)]*\))/m) do
-          index_creations += "CREATE INDEX #{$1} ON #{table_name} #{$2};\n"
-          ""
-        end
-        table_sql += index_creations
-        # Custom indices.
-        table_sql += Database::INDICES.join("\n")
-        table_filename = "#{table_name}.sql"
-        File.open(table_filename, 'wb') do |file|
-          body_io = StringIO.new(table_sql)
-          until body_io.eof?
-            file.write(body_io.read(100 * 1024 * 1024)) # Write 100 MB chunks at a time to avoid Errno::EINVAL
-          end
-        end
-
-        `#{mysql_with_credentials} #{config["database"]} < #{table_filename} #{filter_out_mysql_warning}`
+        output = `#{mysql_with_credentials} #{config["database"]} < #{table_files[table_name]} #{filter_out_mysql_warning}`
+        puts output unless output.strip.empty?
+      end
+      # Custom indices, each on its own so one failing (e.g. already exists) doesn't stop the rest.
+      Database::INDICES.each do |sql|
+        `#{mysql_with_credentials} #{config["database"]} -e "#{sql}" #{filter_out_mysql_warning}`
       end
     end
 
     # Store the export timestamp
-    export_timestamp = File.mtime(filename)
     store_metadata_sql = "CREATE TABLE wca_statistics_metadata (field varchar(255), value varchar(255)); INSERT INTO wca_statistics_metadata (field, value) VALUES ('export_timestamp', '#{export_timestamp.iso8601}')"
     `#{mysql_with_credentials} #{config["database"]} -e "#{store_metadata_sql}" #{filter_out_mysql_warning}`
   end

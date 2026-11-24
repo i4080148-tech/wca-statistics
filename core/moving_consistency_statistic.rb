@@ -7,7 +7,10 @@ require_relative "consistency"
 # streamed from MySQL sorted by person, so memory use stays small even for 3x3.
 class MovingConsistencyStatistic < GroupedStatistic
   # Blindfolded and multi-blind are mostly DNFs, and Fewest Moves results are move counts, not times.
-  EVENTS = Events::ALL.reject { |event_id, _| %w(333bf 444bf 555bf 333mbf 333mbo 333fm).include?(event_id) }
+  # Only events whose results are imported (Database::KEEP_EVENTS, i.e. 2x2).
+  EVENTS = Events::ALL
+    .reject { |event_id, _| %w(333bf 444bf 555bf 333mbf 333mbo 333fm).include?(event_id) }
+    .select { |event_id, _| Database::KEEP_EVENTS.include?(event_id) }
   TOP = 500
 
   # Subclasses return [sort key, table row] for one person, or nil to leave them out.

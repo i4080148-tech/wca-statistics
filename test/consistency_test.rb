@@ -6,6 +6,7 @@ require "minitest/autorun"
 module Mysql2; class Error < StandardError; end; end
 $LOADED_FEATURES << File.expand_path("../core/database.rb", __dir__)
 module Database
+  KEEP_EVENTS = %w(222)
   class FakeClient
     def initialize(rows_by_event) = @rows_by_event = rows_by_event
     def query(sql, **_options)

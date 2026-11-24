@@ -21,8 +21,12 @@ module Database
     round_types
     users
   )
+  # Only results for these events are imported (see core/dump_filter.rb).
+  KEEP_EVENTS = %w(222)
   INDICES = [
     "CREATE INDEX index_results_on_competition_id_person_id ON results (competition_id, person_id);",
+    "CREATE INDEX index_results_on_event_id_person_id ON results (event_id, person_id);",
+    "CREATE INDEX index_result_attempts_on_result_id ON result_attempts (result_id);",
   ]
 
   def self.client

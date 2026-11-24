@@ -11,7 +11,7 @@ list = STATISTICS
   .map { |statistics_id, statistic_object| "- [#{statistic_object.title}](#{statistics_id})\n" }
   .join
 
-list = "Daily-updated WCA statistics, including moving consistency statistics (Moving consistency, Moving bad-solve rate, Moving average stability). Based on [Jonatan Klosko's WCA statistics](https://github.com/jonatanklosko/wca_statistics) and [Justin Barker's fork](https://github.com/JustinTimeCuber/wca_statistics).\n\n" + list
+list = "Daily-updated **2x2** results statistics, including moving consistency statistics (Moving consistency, Moving bad-solve rate, Moving average stability). Only 2x2 results are imported. Based on [Jonatan Klosko's WCA statistics](https://github.com/jonatanklosko/wca_statistics) and [Justin Barker's fork](https://github.com/JustinTimeCuber/wca_statistics).\n\n" + list
 
 destination_path = File.join(build_path, "README.md")
 File.write(destination_path, list)
