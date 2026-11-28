@@ -1,7 +1,7 @@
 ## Yearly rankings
 
 *Note: By definition these rankings include only results from the current year.*
-*Updated on 25 November 2026*
+*Updated on 28 November 2026*
 
 
 ### 2x2x2 Cube - Single
